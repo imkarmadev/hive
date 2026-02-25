@@ -26,7 +26,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(tasks) == 0 {
-		fmt.Println("No tasks. Run: hive task create \"description\"")
+		fmt.Printf("No tasks. Run: %shive task create \"description\"%s\n", colorCyan, colorReset)
 		return nil
 	}
 
@@ -40,18 +40,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("Tasks: %d total\n", len(tasks))
-	fmt.Printf("  backlog:     %d\n", counts[store.StatusBacklog])
-	fmt.Printf("  in_progress: %d\n", counts[store.StatusInProgress])
-	fmt.Printf("  blocked:     %d\n", counts[store.StatusBlocked])
-	fmt.Printf("  review:      %d\n", counts[store.StatusReview])
-	fmt.Printf("  done:        %d\n", counts[store.StatusDone])
-	fmt.Printf("  failed:      %d\n", counts[store.StatusFailed])
+	fmt.Printf("%sTasks: %d total%s\n", colorBold, len(tasks), colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "backlog:", colorWhite, counts[store.StatusBacklog], colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "in_progress:", colorBlue, counts[store.StatusInProgress], colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "blocked:", colorRed, counts[store.StatusBlocked], colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "review:", colorMagenta, counts[store.StatusReview], colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "done:", colorGreen, counts[store.StatusDone], colorReset)
+	fmt.Printf("  %-14s %s%d%s\n", "failed:", colorRed, counts[store.StatusFailed], colorReset)
 
 	if len(blocked) > 0 {
-		fmt.Println("\nBlockers (need your input):")
+		fmt.Printf("\n%s⚠  Blockers (need your input):%s\n", colorRed+colorBold, colorReset)
 		for _, t := range blocked {
-			fmt.Printf("  #%d: %s\n", t.ID, t.BlockedReason)
+			fmt.Printf("  %s#%d%s: %s\n", colorYellow, t.ID, colorReset, t.BlockedReason)
 		}
 	}
 
