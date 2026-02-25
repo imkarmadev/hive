@@ -35,10 +35,19 @@ func ParseSubtasks(output string) []ParsedSubtask {
 	// Find SUBTASKS: section or just numbered/bulleted lines.
 	lines := strings.Split(output, "\n")
 	inSection := false
+	hasExplicitHeader := false
 
 	// Pattern: "1. Title - Description (priority: high)" or "- Title - Description"
 	numberedRe := regexp.MustCompile(`^(?:\d+[\.\)]\s*|[-*]\s+)(.+)`)
 	priorityRe := regexp.MustCompile(`\(priority:\s*(high|medium|low)\)`)
+
+	// Check if there's an explicit SUBTASKS: header — if so, only parse that section.
+	for _, line := range lines {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(line)), "SUBTASKS:") {
+			hasExplicitHeader = true
+			break
+		}
+	}
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -51,7 +60,7 @@ func ParseSubtasks(output string) []ParsedSubtask {
 
 		// Stop at next section header or empty block after subtasks.
 		if inSection && trimmed == "" {
-			// Allow one empty line, but two in a row means end of section.
+			// Allow empty lines within the section.
 			continue
 		}
 		if inSection && !numberedRe.MatchString(trimmed) && trimmed != "" {
@@ -63,7 +72,11 @@ func ParseSubtasks(output string) []ParsedSubtask {
 		}
 
 		if !inSection {
-			// Also try to parse numbered lists even without SUBTASKS: header.
+			// If there's an explicit SUBTASKS: header, skip everything before it.
+			if hasExplicitHeader {
+				continue
+			}
+			// Fallback: try to parse numbered lists even without SUBTASKS: header.
 			if !numberedRe.MatchString(trimmed) {
 				continue
 			}
@@ -93,9 +106,19 @@ func ParseSubtasks(output string) []ParsedSubtask {
 			description = strings.TrimSpace(content[idx+3:])
 		}
 
-		// Clean up markdown formatting.
-		title = strings.Trim(title, "[]**`")
+		// Clean up markdown formatting: strip []**` and trailing colons/punctuation.
+		title = strings.Trim(title, "[]`")
+		// Remove leading/trailing ** (markdown bold).
+		title = strings.TrimPrefix(title, "**")
+		title = strings.TrimSuffix(title, "**")
+		title = strings.TrimRight(title, ":")
 		title = strings.TrimSpace(title)
+
+		// Skip lines that look like section headers, not real subtasks.
+		// These are artifacts from LLMs writing markdown analysis instead of clean lists.
+		if isGarbageSubtask(title) {
+			continue
+		}
 
 		if title != "" {
 			subtasks = append(subtasks, ParsedSubtask{
@@ -106,7 +129,51 @@ func ParseSubtasks(output string) []ParsedSubtask {
 		}
 	}
 
+	// Cap at 10 subtasks to prevent runaway parsing.
+	if len(subtasks) > 10 {
+		subtasks = subtasks[:10]
+	}
+
 	return subtasks
+}
+
+// isGarbageSubtask returns true if a title looks like a section header
+// or analysis fragment rather than a real actionable subtask.
+func isGarbageSubtask(title string) bool {
+	lower := strings.ToLower(title)
+
+	// Titles that are just section labels, not tasks.
+	garbagePatterns := []string{
+		"existing mitigations",
+		"known limitations",
+		"low-risk issues",
+		"high-risk issues",
+		"medium-risk issues",
+		"summary",
+		"overview",
+		"background",
+		"findings",
+		"analysis",
+		"recommendations",
+		"conclusion",
+		"references",
+		"notes",
+		"already mitigated",
+		"documented as",
+		"currently",
+	}
+	for _, p := range garbagePatterns {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+
+	// Very short titles (< 5 chars) are likely not real subtasks.
+	if len(title) < 5 {
+		return true
+	}
+
+	return false
 }
 
 // ParseReview extracts the verdict and comments from reviewer output.
@@ -235,11 +302,24 @@ func inferVerdict(upperOutput string) string {
 }
 
 // ParseBlocked extracts a BLOCKED reason from agent output.
+// Handles various formats LLMs produce:
+//
+//	BLOCKED: question                — clean format
+//	**BLOCKED: question**            — markdown bold
+//	**BLOCKED:** question            — markdown bold on label
+//	> BLOCKED: question              — blockquote
 func ParseBlocked(output string) string {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToUpper(trimmed), "BLOCKED:") {
-			return strings.TrimSpace(trimmed[8:])
+		// Strip common markdown prefixes: >, *, #, -
+		cleaned := strings.TrimLeft(trimmed, ">*#- ")
+		cleaned = strings.TrimSpace(cleaned)
+		if strings.HasPrefix(strings.ToUpper(cleaned), "BLOCKED:") {
+			reason := strings.TrimSpace(cleaned[8:])
+			// Strip surrounding markdown (e.g., leading/trailing **)
+			reason = strings.Trim(reason, "*")
+			reason = strings.TrimSpace(reason)
+			return reason
 		}
 	}
 	return ""

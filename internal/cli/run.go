@@ -106,6 +106,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Force auto_accept for CLI agents to prevent interactive prompts.
+	forceAutoAccept(&agentCfg)
+
 	// Create the runner.
 	runner, err := agent.NewRunner(agentName, agentCfg)
 	if err != nil {
@@ -165,7 +168,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// Check for BLOCKED pattern in output.
-	if blocked := extractBlocked(resp.Output); blocked != "" {
+	if blocked := agent.ParseBlocked(resp.Output); blocked != "" {
 		s.BlockTask(task.ID, blocked)
 		fmt.Printf("Agent requested blocker: %s\n", blocked)
 		fmt.Printf("Answer with: hive answer %d \"your answer\"\n", task.ID)
@@ -182,16 +185,22 @@ func runRun(cmd *cobra.Command, args []string) error {
 	} else {
 		// If this is a reviewer, check verdict.
 		if role == "reviewer" {
-			verdict := extractVerdict(resp.Output)
-			switch verdict {
+			review := agent.ParseReview(resp.Output)
+			switch review.Verdict {
 			case "REJECT":
 				s.AddReview(task.ID, agentName, "reject", resp.Output)
 				s.UpdateTaskStatus(task.ID, store.StatusBacklog)
 				fmt.Printf("Review: REJECTED. Task moved back to backlog for fixes.\n")
+				for _, c := range review.Comments {
+					fmt.Printf("  %s•%s %s\n", colorRed, colorReset, c)
+				}
 			case "APPROVE":
 				s.AddReview(task.ID, agentName, "approve", resp.Output)
 				s.UpdateTaskStatus(task.ID, store.StatusDone)
 				fmt.Printf("Review: APPROVED. Task done.\n")
+				for _, c := range review.Comments {
+					fmt.Printf("  %s•%s %s\n", colorGreen, colorReset, c)
+				}
 			default:
 				s.UpdateTaskStatus(task.ID, store.StatusReview)
 				fmt.Printf("Review complete. Check output for verdict.\n")
@@ -236,34 +245,6 @@ func findNextTask(s *store.Store) (*store.Task, error) {
 		return nil, fmt.Errorf("no assigned backlog tasks found. Create and assign a task first")
 	}
 	return best, nil
-}
-
-// extractBlocked looks for a "BLOCKED:" pattern in agent output.
-func extractBlocked(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToUpper(line), "BLOCKED:") {
-			return strings.TrimSpace(line[8:])
-		}
-	}
-	return ""
-}
-
-// extractVerdict looks for a "VERDICT:" pattern in agent output.
-func extractVerdict(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToUpper(line), "VERDICT:") {
-			verdict := strings.TrimSpace(strings.ToUpper(line[8:]))
-			if strings.Contains(verdict, "APPROVE") {
-				return "APPROVE"
-			}
-			if strings.Contains(verdict, "REJECT") {
-				return "REJECT"
-			}
-		}
-	}
-	return ""
 }
 
 func availableAgents(cfg *config.Config) string {

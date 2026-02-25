@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/imkarma/hive/internal/tui"
@@ -11,7 +12,7 @@ import (
 var uiCmd = &cobra.Command{
 	Use:   "ui",
 	Short: "Open interactive TUI dashboard",
-	Long:  "Opens a lazygit-style interactive kanban board where you can manage tasks, answer blockers, and monitor agent work.",
+	Long:  "Opens an interactive dashboard showing epic cards with pipeline progress, blocker resolution, and accept/reject workflows.",
 	RunE:  runUI,
 }
 
@@ -25,7 +26,8 @@ func runUI(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	model := tui.New(s)
+	workDir, _ := os.Getwd()
+	model := tui.New(s, workDir)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	finalModel, err := p.Run()

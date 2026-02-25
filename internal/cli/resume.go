@@ -170,12 +170,13 @@ func resumeRun(s *store.Store, runID int64, cmd *cobra.Command) error {
 	fmt.Printf("  %s✓ Marked run #%d as interrupted%s\n\n", colorDim, target.ID, colorReset)
 
 	// Step 3: Re-run auto with same settings.
-	fmt.Printf("  Resuming with: max-loops=%d parallel=%d --skip-plan\n\n", target.MaxLoops, target.Parallel)
+	fmt.Printf("  Resuming with: max-loops=%d parallel=%d --skip-plan --skip-architect\n\n", target.MaxLoops, target.Parallel)
 
 	// Set the global flags used by runAuto, then call it.
 	autoMaxLoops = target.MaxLoops
 	autoParallel = target.Parallel
 	autoSkipPlan = true
+	autoSkipArchitect = true
 
 	return runAuto(cmd, []string{strconv.FormatInt(epic.ID, 10)})
 }

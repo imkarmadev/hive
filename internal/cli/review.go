@@ -79,6 +79,9 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build review context: %w", err)
 	}
 
+	// Force auto_accept for CLI agents to prevent interactive prompts.
+	forceAutoAccept(&agentCfg)
+
 	// Create runner.
 	runner, err := agent.NewRunner(agentName, agentCfg)
 	if err != nil {

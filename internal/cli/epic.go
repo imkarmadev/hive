@@ -113,19 +113,11 @@ func runEpicCreate(cmd *cobra.Command, args []string) error {
 
 	if safety.IsGitRepo() {
 		branch := git.BranchName(epic.ID)
-
-		if safety.HasUncommittedChanges() {
-			fmt.Printf("\n%s⚠  Uncommitted changes detected.%s\n", colorYellow, colorReset)
-			fmt.Printf("  Commit or stash them before starting work on this epic.\n")
-			fmt.Printf("  Safety branch %s%s%s will be created when you run %shive plan %d%s\n",
-				colorCyan, branch, colorReset, colorCyan, epic.ID, colorReset)
+		if err := safety.CreateBranch(branch); err != nil {
+			fmt.Printf("\n%s⚠  Could not create safety branch: %v%s\n", colorYellow, err, colorReset)
 		} else {
-			if err := safety.CreateBranch(branch); err != nil {
-				fmt.Printf("\n%s⚠  Could not create safety branch: %v%s\n", colorYellow, err, colorReset)
-			} else {
-				s.SetGitBranch(epic.ID, branch)
-				fmt.Printf("  Branch: %s%s%s (safety net — all agent work happens here)\n", colorCyan, branch, colorReset)
-			}
+			s.SetGitBranch(epic.ID, branch)
+			fmt.Printf("  Branch: %s%s%s (safety net — all agent work happens here)\n", colorCyan, branch, colorReset)
 		}
 	}
 
@@ -283,6 +275,27 @@ func runEpicAccept(cmd *cobra.Command, args []string) error {
 	}
 	if epic.GitBranch == "" {
 		return fmt.Errorf("epic #%d has no safety branch", id)
+	}
+
+	// Guard: all tasks must be done or cancelled.
+	tasks, _ := s.ListTasksByEpic(id)
+	var pending []store.Task
+	for _, t := range tasks {
+		if t.Status != store.StatusDone && t.Status != store.StatusCancelled {
+			pending = append(pending, t)
+		}
+	}
+	if len(pending) > 0 {
+		fmt.Printf("%s✗ Cannot accept — %d task(s) not finished:%s\n\n", colorRed+colorBold, len(pending), colorReset)
+		for _, t := range pending {
+			statusColor := statusToColor(t.Status)
+			fmt.Printf("  %s#%-4d%s %s%-12s%s %s\n",
+				colorYellow, t.ID, colorReset,
+				statusColor, t.Status, colorReset,
+				t.Title)
+		}
+		fmt.Printf("\nFinish, cancel, or answer blocked tasks first.\n")
+		return nil
 	}
 
 	workDir, _ := os.Getwd()
@@ -481,6 +494,8 @@ func statusToColor(status store.TaskStatus) string {
 		return colorGreen
 	case store.StatusFailed:
 		return colorRed + colorBold
+	case store.StatusCancelled:
+		return colorDim
 	default:
 		return ""
 	}

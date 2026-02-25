@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -188,6 +189,70 @@ Some issues I found:
 	}
 }
 
+func TestParseSubtasks_GarbageSectionHeaders(t *testing.T) {
+	// Simulates a PM that writes analysis with section headers and markdown bold.
+	// Only real subtasks after SUBTASKS: should be parsed; section headers should be filtered.
+	output := `I analyzed the project and here are my findings:
+
+1. Comprehensive SECURITY.md document** that already identifies vulnerabilities
+2. Existing mitigations**:
+3. Known limitations** (documented as architectural):
+
+SUBTASKS:
+1. Sanitize shell metacharacters in vars/resolver.go Substitute() - Escape backticks, $(), and pipe chars in variable substitution (priority: high)
+2. Add input validation to runner/runner.go ExecCmd() - Validate default_cmd does not contain shell injection patterns (priority: high)
+3. Existing mitigations**: some description here (priority: medium)
+4. Path traversal prevention in config/loader.go - Ensure config file paths are restricted to project root (priority: medium)
+`
+
+	subtasks := ParseSubtasks(output)
+
+	// Should get 3 real subtasks: items 1, 2, 4 from SUBTASKS section.
+	// Item 3 "Existing mitigations**" should be filtered as garbage.
+	// Items before SUBTASKS: should be ignored because explicit header exists.
+	if len(subtasks) != 3 {
+		t.Fatalf("expected 3 subtasks, got %d: %+v", len(subtasks), subtasks)
+	}
+
+	if subtasks[0].Title != "Sanitize shell metacharacters in vars/resolver.go Substitute()" {
+		t.Errorf("subtask 0 title: got %q", subtasks[0].Title)
+	}
+	if subtasks[1].Title != "Add input validation to runner/runner.go ExecCmd()" {
+		t.Errorf("subtask 1 title: got %q", subtasks[1].Title)
+	}
+	if subtasks[2].Title != "Path traversal prevention in config/loader.go" {
+		t.Errorf("subtask 2 title: got %q", subtasks[2].Title)
+	}
+}
+
+func TestParseSubtasks_MarkdownBoldCleaning(t *testing.T) {
+	output := `SUBTASKS:
+1. **Fix SQL injection in db/query.go** - Parameterize raw queries (priority: high)
+2. [Update dependencies] - Bump vulnerable packages (priority: medium)
+`
+	subtasks := ParseSubtasks(output)
+	if len(subtasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(subtasks))
+	}
+	if subtasks[0].Title != "Fix SQL injection in db/query.go" {
+		t.Errorf("expected cleaned title, got %q", subtasks[0].Title)
+	}
+	if subtasks[1].Title != "Update dependencies" {
+		t.Errorf("expected cleaned title, got %q", subtasks[1].Title)
+	}
+}
+
+func TestParseSubtasks_CapAt10(t *testing.T) {
+	output := "SUBTASKS:\n"
+	for i := 1; i <= 15; i++ {
+		output += fmt.Sprintf("%d. Task number %d - Description of task %d (priority: medium)\n", i, i, i)
+	}
+	subtasks := ParseSubtasks(output)
+	if len(subtasks) != 10 {
+		t.Fatalf("expected 10 subtasks (capped), got %d", len(subtasks))
+	}
+}
+
 func TestParseBlocked(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -197,6 +262,15 @@ func TestParseBlocked(t *testing.T) {
 		{"Some text\nBLOCKED: Need clarification on API format\nMore text", "Need clarification on API format"},
 		{"No blockers here", ""},
 		{"blocked: lowercase works too", "lowercase works too"},
+		// Markdown bold — the most common LLM variant.
+		{"**BLOCKED: This task requires architectural clarification**", "This task requires architectural clarification"},
+		{"**BLOCKED:** This task cannot be completed as specified.", "This task cannot be completed as specified."},
+		// Blockquote.
+		{"> BLOCKED: Needs user input on API version", "Needs user input on API version"},
+		// Markdown heading prefix.
+		{"## BLOCKED: Design decision needed", "Design decision needed"},
+		// Bullet prefix.
+		{"- BLOCKED: Which ORM should we use?", "Which ORM should we use?"},
 	}
 
 	for _, tc := range tests {

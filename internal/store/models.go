@@ -12,6 +12,7 @@ const (
 	StatusReview     TaskStatus = "review"
 	StatusDone       TaskStatus = "done"
 	StatusFailed     TaskStatus = "failed"
+	StatusCancelled  TaskStatus = "cancelled"
 )
 
 // TaskKind distinguishes epics (user-created) from tasks (PM-generated).

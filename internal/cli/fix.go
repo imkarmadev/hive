@@ -96,6 +96,10 @@ func runFix(cmd *cobra.Command, args []string) error {
 	coderCfg := cfg.Agents[coderName]
 	reviewerCfg := cfg.Agents[reviewerName]
 
+	// Force auto_accept for CLI agents to prevent interactive prompts.
+	forceAutoAccept(&coderCfg)
+	forceAutoAccept(&reviewerCfg)
+
 	coderRunner, err := agent.NewRunner(coderName, coderCfg)
 	if err != nil {
 		return fmt.Errorf("create coder runner: %w", err)

@@ -22,9 +22,10 @@ var autoCmd = &cobra.Command{
 	Long: `Runs the complete pipeline automatically:
 
   1. PM agent breaks epic into tasks (plan)
-  2. Auto-assigns agents by role from config
-  3. For each task: code → review → fix loop
-  4. Reports final summary
+  2. Auto-assigns coder agents
+  3. Architect researches each task and writes a technical spec
+  4. For each task: code → review → fix loop
+  5. Reports final summary
 
 All work happens on the epic's git safety branch.
 When done, review with 'hive epic diff' and accept/reject.
@@ -35,14 +36,16 @@ Stops on blockers — answer them with 'hive answer' and re-run.`,
 }
 
 var (
-	autoMaxLoops int
-	autoSkipPlan bool
-	autoParallel int
+	autoMaxLoops      int
+	autoSkipPlan      bool
+	autoSkipArchitect bool
+	autoParallel      int
 )
 
 func init() {
 	autoCmd.Flags().IntVar(&autoMaxLoops, "max-loops", 3, "Maximum fix-review iterations per task")
 	autoCmd.Flags().BoolVar(&autoSkipPlan, "skip-plan", false, "Skip planning, run directly on existing tasks")
+	autoCmd.Flags().BoolVar(&autoSkipArchitect, "skip-architect", false, "Skip architect research phase")
 	autoCmd.Flags().IntVar(&autoParallel, "parallel", 1, "Number of tasks to run in parallel (uses git worktrees)")
 	rootCmd.AddCommand(autoCmd)
 }
@@ -89,16 +92,18 @@ func runAuto(cmd *cobra.Command, args []string) error {
 		safety := git.New(workDir)
 		if safety.IsGitRepo() {
 			if task.GitBranch == "" {
-				// Create safety branch.
+				// Create safety branch. git checkout -b carries uncommitted
+				// changes to the new branch, which is what we want — the
+				// safety branch is where all work should happen.
 				branch := git.BranchName(task.ID)
-				if !safety.HasUncommittedChanges() {
-					if err := safety.CreateBranch(branch); err == nil {
-						s.SetGitBranch(task.ID, branch)
-						task.GitBranch = branch
-					}
+				if err := safety.CreateBranch(branch); err == nil {
+					s.SetGitBranch(task.ID, branch)
+					task.GitBranch = branch
+					fmt.Printf("  Branch: %s\n\n", branch)
+				} else {
+					fmt.Printf("  %s⚠ Could not create safety branch: %v%s\n\n", colorYellow, err, colorReset)
 				}
-			}
-			if task.GitBranch != "" {
+			} else {
 				current, _ := safety.CurrentBranch()
 				if current != task.GitBranch {
 					if err := safety.CreateBranch(task.GitBranch); err != nil {
@@ -111,8 +116,17 @@ func runAuto(cmd *cobra.Command, args []string) error {
 
 	// Resolve agents by role.
 	pmName, pmCfg := findAgentByRole(cfg, "pm")
+	archName, archCfg := findAgentByRole(cfg, "architect")
 	coderName, coderCfg := findAgentByRole(cfg, "coder")
 	reviewerName, reviewerCfg := findAgentByRole(cfg, "reviewer")
+
+	// In auto pipeline mode, force auto_accept on all CLI agents.
+	// Without it, CLI tools like claude wait for interactive permission
+	// which never comes since we capture stdout/stderr.
+	forceAutoAccept(&pmCfg)
+	forceAutoAccept(&archCfg)
+	forceAutoAccept(&coderCfg)
+	forceAutoAccept(&reviewerCfg)
 
 	label := "Task"
 	if task.Kind == store.KindEpic {
@@ -128,13 +142,16 @@ func runAuto(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Branch:   %s%s%s\n", colorCyan, task.GitBranch, colorReset)
 	}
 	if pmName != "" {
-		fmt.Printf("  PM:       %s%s%s\n", colorCyan, pmName, colorReset)
+		fmt.Printf("  PM:        %s%s%s\n", colorCyan, pmName, colorReset)
+	}
+	if archName != "" {
+		fmt.Printf("  Architect: %s%s%s\n", colorCyan, archName, colorReset)
 	}
 	if coderName != "" {
-		fmt.Printf("  Coder:    %s%s%s\n", colorCyan, coderName, colorReset)
+		fmt.Printf("  Coder:     %s%s%s\n", colorCyan, coderName, colorReset)
 	}
 	if reviewerName != "" {
-		fmt.Printf("  Reviewer: %s%s%s\n", colorCyan, reviewerName, colorReset)
+		fmt.Printf("  Reviewer:  %s%s%s\n", colorCyan, reviewerName, colorReset)
 	}
 	fmt.Printf("  Max fix loops: %d\n", autoMaxLoops)
 	if autoParallel > 1 {
@@ -162,7 +179,21 @@ func runAuto(cmd *cobra.Command, args []string) error {
 	// ══════════════════════════════════════
 	var subtasks []store.Task
 
-	if !autoSkipPlan {
+	// Smart resume: if epic already has subtasks, skip planning automatically.
+	existing, _ := s.ListTasksByEpic(task.ID)
+	if len(existing) == 0 {
+		// Fallback: check old-style parent_id children.
+		allTasks, _ := s.ListTasks("")
+		for _, t := range allTasks {
+			if t.ParentID != nil && *t.ParentID == task.ID {
+				existing = append(existing, t)
+			}
+		}
+	}
+
+	needsPlan := !autoSkipPlan && len(existing) == 0
+
+	if needsPlan {
 		printPhase("1", "PLAN", "Breaking task into subtasks")
 
 		if pmName == "" {
@@ -180,23 +211,12 @@ func runAuto(cmd *cobra.Command, args []string) error {
 			}
 			subtasks = planned
 		}
+	} else if len(existing) > 0 {
+		printPhase("1", "PLAN", fmt.Sprintf("Resuming — %d existing tasks", len(existing)))
+		subtasks = existing
 	} else {
 		printPhase("1", "PLAN", "Skipped (--skip-plan)")
-		// Gather existing subtasks.
-		subtasks, _ = s.ListTasksByEpic(task.ID)
-		if len(subtasks) == 0 {
-			// Fallback: check old-style parent_id children.
-			allTasks, _ := s.ListTasks("")
-			for _, t := range allTasks {
-				if t.ParentID != nil && *t.ParentID == task.ID {
-					subtasks = append(subtasks, t)
-				}
-			}
-		}
-		if len(subtasks) == 0 {
-			subtasks = []store.Task{*task}
-		}
-		fmt.Printf("  Found %d tasks\n\n", len(subtasks))
+		subtasks = []store.Task{*task}
 	}
 
 	// ══════════════════════════════════════
@@ -220,6 +240,49 @@ func runAuto(cmd *cobra.Command, args []string) error {
 		}
 	}
 	fmt.Println()
+
+	// ══════════════════════════════════════
+	// STEP 2.5: Architect research
+	// ══════════════════════════════════════
+	if archName != "" && !autoSkipArchitect {
+		printPhase("2.5", "ARCHITECT", "Technical research & spec")
+
+		archBlocked := 0
+		for i := range subtasks {
+			t := &subtasks[i]
+			if t.Status == store.StatusDone || t.Status == store.StatusBlocked || t.Status == store.StatusCancelled {
+				continue
+			}
+
+			fmt.Printf("  #%d %s — ", t.ID, truncateAuto(t.Title, 40))
+			result := autoArchitect(s, t, archName, archCfg, workDir)
+			switch result {
+			case "done":
+				fmt.Printf("%s✓ spec written%s\n", colorGreen, colorReset)
+			case "blocked":
+				fmt.Printf("%s⚠ BLOCKED%s\n", colorYellow, colorReset)
+				archBlocked++
+			default:
+				fmt.Printf("%s✗ failed%s\n", colorRed, colorReset)
+			}
+		}
+
+		if archBlocked > 0 {
+			fmt.Printf("\n  %s⚠ %d task(s) blocked by architect — answer with 'hive answer <id> \"...\"'%s\n",
+				colorYellow, archBlocked, colorReset)
+		}
+		fmt.Println()
+	} else if archName != "" && autoSkipArchitect {
+		printPhase("2.5", "ARCHITECT", "Skipped (--skip-architect)")
+	}
+
+	// Re-read subtasks from DB — architect phase may have blocked some.
+	if task.Kind == store.KindEpic {
+		refreshed, err := s.ListTasksByEpic(task.ID)
+		if err == nil && len(refreshed) > 0 {
+			subtasks = refreshed
+		}
+	}
 
 	// ══════════════════════════════════════
 	// STEP 3: Code + Review loop per task
@@ -290,10 +353,16 @@ func runAuto(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
+			if subtask.Status == store.StatusCancelled {
+				fmt.Printf("  %s— Cancelled%s\n\n", colorDim, colorReset)
+				completed++ // counts towards "finished" for epic completion
+				continue
+			}
+
 			if subtask.Status == store.StatusBlocked {
 				fmt.Printf("  %s⚠ Blocked: %s%s\n", colorRed, subtask.BlockedReason, colorReset)
-				fmt.Printf("  → %shive answer %d \"...\" && hive auto %d --skip-plan%s\n\n",
-					colorCyan, subtask.ID, task.ID, colorReset)
+				fmt.Printf("  → %shive answer %d \"...\"%s\n\n",
+					colorCyan, subtask.ID, colorReset)
 				blocked++
 				continue
 			}
@@ -657,6 +726,74 @@ func findAgentByRole(cfg *config.Config, role string) (string, config.Agent) {
 		}
 	}
 	return "", config.Agent{}
+}
+
+// autoArchitect runs the architect agent on a task to produce a technical spec.
+// The spec is saved as an event so the coder can read it via context builder.
+// Returns "done", "blocked", or "failed".
+func autoArchitect(s *store.Store, task *store.Task, archName string, archCfg config.Agent, workDir string) string {
+	ctxBuilder := agentctx.New(s)
+	prompt, err := ctxBuilder.BuildPrompt(task, "architect")
+	if err != nil {
+		return "failed"
+	}
+
+	runner, err := agent.NewRunner(archName, archCfg)
+	if err != nil {
+		return "failed"
+	}
+
+	resp, err := runner.Run(context.Background(), agent.Request{
+		TaskID:     task.ID,
+		Prompt:     prompt,
+		WorkDir:    workDir,
+		TimeoutSec: archCfg.DefaultTimeout(),
+	})
+	if err != nil {
+		return "failed"
+	}
+
+	// Save artifact.
+	artifactPath := hivePath("runs", fmt.Sprintf("task-%d-architect.md", task.ID))
+	os.MkdirAll(hivePath("runs"), 0755)
+	os.WriteFile(artifactPath, []byte(resp.Output), 0644)
+	s.AddArtifact(task.ID, "architect", artifactPath)
+
+	// Check for blocker.
+	if b := agent.ParseBlocked(resp.Output); b != "" {
+		s.BlockTask(task.ID, b)
+		return "blocked"
+	}
+
+	// Save the full spec as an event so the coder gets it via context builder.
+	// Truncate if very long, but keep much more than normal events.
+	spec := resp.Output
+	if len(spec) > 4000 {
+		spec = spec[:4000] + "\n\n... (spec truncated, see full output in artifacts)"
+	}
+	s.AddEvent(task.ID, archName, "architect_spec", spec)
+
+	return "done"
+}
+
+func truncateAuto(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
+// forceAutoAccept enables auto_accept on a CLI agent config.
+// In pipeline mode (hive auto), agents must run non-interactively.
+// Without auto_accept, CLI tools like claude wait for permission to
+// edit files, which never comes since stdout/stderr are captured.
+func forceAutoAccept(cfg *config.Agent) {
+	if cfg.Mode == "cli" && !cfg.AutoAccept {
+		cfg.AutoAccept = true
+	}
 }
 
 func printPhase(num, label, desc string) {

@@ -64,6 +64,14 @@ var taskDoneCmd = &cobra.Command{
 	RunE:  runTaskDone,
 }
 
+var taskCancelCmd = &cobra.Command{
+	Use:   "cancel [id]",
+	Short: "Cancel a task — skip it in the pipeline",
+	Long:  "Marks a task as cancelled. The pipeline will skip it. Epic can be accepted without it.",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTaskCancel,
+}
+
 func init() {
 	taskCreateCmd.Flags().StringVarP(&taskPriority, "priority", "p", "medium", "Priority: high, medium, low")
 	taskCreateCmd.Flags().StringVarP(&taskDescription, "desc", "d", "", "Task description")
@@ -77,6 +85,7 @@ func init() {
 	taskCmd.AddCommand(taskAssignCmd)
 	taskCmd.AddCommand(taskBlockCmd)
 	taskCmd.AddCommand(taskDoneCmd)
+	taskCmd.AddCommand(taskCancelCmd)
 }
 
 func runTaskCreate(cmd *cobra.Command, args []string) error {
@@ -259,5 +268,36 @@ func runTaskDone(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Task #%d marked as done\n", id)
+	return nil
+}
+
+func runTaskCancel(cmd *cobra.Command, args []string) error {
+	s, err := mustStore()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid task ID: %s", args[0])
+	}
+
+	task, err := s.GetTask(id)
+	if err != nil {
+		return fmt.Errorf("task #%d not found", id)
+	}
+
+	if task.Status == store.StatusDone {
+		return fmt.Errorf("task #%d is already done", id)
+	}
+
+	if err := s.UpdateTaskStatus(id, store.StatusCancelled); err != nil {
+		return err
+	}
+	s.AddEvent(id, "user", "cancelled", "Task cancelled by user")
+
+	fmt.Printf("Cancelled task #%d: %s\n", id, task.Title)
+	fmt.Printf("  Pipeline will skip this task. Epic can be accepted without it.\n")
 	return nil
 }

@@ -78,7 +78,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	} else if task.Kind == store.KindEpic && task.GitBranch == "" {
 		// Epic without a branch — create one now.
 		safety := git.New(workDir)
-		if safety.IsGitRepo() && !safety.HasUncommittedChanges() {
+		if safety.IsGitRepo() {
 			branch := git.BranchName(task.ID)
 			if err := safety.CreateBranch(branch); err == nil {
 				s.SetGitBranch(task.ID, branch)
@@ -112,6 +112,9 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("build context: %w", err)
 	}
+
+	// Force auto_accept for CLI agents to prevent interactive prompts.
+	forceAutoAccept(&agentCfg)
 
 	// Create runner.
 	runner, err := agent.NewRunner(agentName, agentCfg)
