@@ -4,6 +4,7 @@ package context
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/imkarma/hive/internal/store"
@@ -55,6 +56,71 @@ func (b *Builder) BuildPrompt(task *store.Task, role string) (string, error) {
 	parts = append(parts, b.roleInstructions(role))
 
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// BuildReviewPrompt creates a specialized prompt for code review.
+// Includes the task context plus git diff to show what changed.
+func (b *Builder) BuildReviewPrompt(task *store.Task) (string, error) {
+	var parts []string
+
+	parts = append(parts, b.roleHeader("reviewer"))
+	parts = append(parts, b.taskSection(task))
+
+	// Parent context.
+	if task.ParentID != nil {
+		parentCtx, err := b.parentContext(*task.ParentID)
+		if err == nil && parentCtx != "" {
+			parts = append(parts, parentCtx)
+		}
+	}
+
+	// Git diff — the core of the review.
+	diff := b.gitDiff()
+	if diff != "" {
+		parts = append(parts, "## Changes (git diff)\n```diff\n"+diff+"\n```")
+	}
+
+	// Event history (previous reviews, user answers).
+	eventCtx, err := b.eventHistory(task.ID)
+	if err == nil && eventCtx != "" {
+		parts = append(parts, eventCtx)
+	}
+
+	parts = append(parts, b.roleInstructions("reviewer"))
+
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// gitDiff returns the current uncommitted changes, or the last commit diff.
+func (b *Builder) gitDiff() string {
+	// First try uncommitted changes.
+	out, err := exec.Command("git", "diff").Output()
+	if err == nil && len(out) > 0 {
+		return truncateDiff(string(out))
+	}
+
+	// Try staged changes.
+	out, err = exec.Command("git", "diff", "--cached").Output()
+	if err == nil && len(out) > 0 {
+		return truncateDiff(string(out))
+	}
+
+	// Fall back to last commit.
+	out, err = exec.Command("git", "diff", "HEAD~1").Output()
+	if err == nil && len(out) > 0 {
+		return truncateDiff(string(out))
+	}
+
+	return ""
+}
+
+// truncateDiff limits diff size to avoid blowing up the prompt.
+func truncateDiff(diff string) string {
+	const maxLen = 8000
+	if len(diff) <= maxLen {
+		return diff
+	}
+	return diff[:maxLen] + "\n\n... (diff truncated, " + fmt.Sprintf("%d", len(diff)) + " bytes total)"
 }
 
 func (b *Builder) roleHeader(role string) string {
