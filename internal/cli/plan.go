@@ -9,14 +9,19 @@ import (
 	"github.com/imkarma/hive/internal/agent"
 	"github.com/imkarma/hive/internal/config"
 	agentctx "github.com/imkarma/hive/internal/context"
+	"github.com/imkarma/hive/internal/git"
+	"github.com/imkarma/hive/internal/store"
 	"github.com/spf13/cobra"
 )
 
 var planCmd = &cobra.Command{
-	Use:   "plan [task-id]",
-	Short: "Break a task into subtasks using a PM agent",
-	Long: `Runs the PM-role agent on a task to break it into subtasks.
-Subtasks are automatically created on the board.
+	Use:   "plan [epic-id]",
+	Short: "Break an epic into tasks using a PM agent",
+	Long: `Runs the PM-role agent on an epic (or task) to break it into subtasks.
+Tasks are automatically created on the board under the epic.
+
+If the target is an epic and it has a safety branch, hive switches
+to that branch before running the PM agent.
 
 The PM agent is the first agent with role "pm" in your config.
 Override with --agent flag.`,
@@ -43,14 +48,44 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Get the task.
+	// Get the epic/task.
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		return fmt.Errorf("invalid task ID: %s", args[0])
+		return fmt.Errorf("invalid ID: %s", args[0])
 	}
 	task, err := s.GetTask(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found", id)
+		return fmt.Errorf("#%d not found", id)
+	}
+
+	workDir, _ := os.Getwd()
+
+	// If this is an epic with a safety branch, ensure we're on it.
+	if task.Kind == store.KindEpic && task.GitBranch != "" {
+		safety := git.New(workDir)
+		if safety.IsGitRepo() {
+			current, _ := safety.CurrentBranch()
+			if current != task.GitBranch {
+				// Create/switch to the safety branch.
+				if err := safety.CreateBranch(task.GitBranch); err != nil {
+					fmt.Printf("%s⚠  Could not switch to safety branch %s: %v%s\n",
+						colorYellow, task.GitBranch, err, colorReset)
+				} else {
+					fmt.Printf("  Switched to safety branch %s%s%s\n\n", colorCyan, task.GitBranch, colorReset)
+				}
+			}
+		}
+	} else if task.Kind == store.KindEpic && task.GitBranch == "" {
+		// Epic without a branch — create one now.
+		safety := git.New(workDir)
+		if safety.IsGitRepo() && !safety.HasUncommittedChanges() {
+			branch := git.BranchName(task.ID)
+			if err := safety.CreateBranch(branch); err == nil {
+				s.SetGitBranch(task.ID, branch)
+				task.GitBranch = branch
+				fmt.Printf("  Created safety branch %s%s%s\n\n", colorCyan, branch, colorReset)
+			}
+		}
 	}
 
 	// Find PM agent.
@@ -84,9 +119,11 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create agent: %w", err)
 	}
 
-	workDir, _ := os.Getwd()
-
-	fmt.Printf("Planning task #%d: %s\n", task.ID, task.Title)
+	label := "task"
+	if task.Kind == store.KindEpic {
+		label = "epic"
+	}
+	fmt.Printf("Planning %s #%d: %s\n", label, task.ID, task.Title)
 	fmt.Printf("  PM Agent: %s\n\n", agentName)
 
 	// Run PM agent.
@@ -125,7 +162,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create subtasks on the board.
-	fmt.Printf("%sCreated %d subtasks:%s\n\n", colorBold, len(subtasks), colorReset)
+	fmt.Printf("%sCreated %d tasks:%s\n\n", colorBold, len(subtasks), colorReset)
 
 	for _, sub := range subtasks {
 		parentID := task.ID
@@ -142,9 +179,9 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		fmt.Printf(" [%s]\n", sub.Priority)
 	}
 
-	fmt.Printf("\nNext: assign agents with %shive task assign <id> <agent>%s\n", colorCyan, colorReset)
+	fmt.Printf("\nNext: %shive auto %d%s to run the full pipeline, or assign agents manually\n", colorCyan, task.ID, colorReset)
 
-	s.AddEvent(task.ID, agentName, "planned", fmt.Sprintf("Created %d subtasks", len(subtasks)))
+	s.AddEvent(task.ID, agentName, "planned", fmt.Sprintf("Created %d tasks", len(subtasks)))
 
 	return nil
 }

@@ -43,7 +43,7 @@ func runBoard(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(tasks) == 0 {
-		fmt.Printf("%sBoard is empty.%s Create a task: %shive task create \"description\"%s\n",
+		fmt.Printf("%sBoard is empty.%s Create an epic: %shive epic create \"description\"%s\n",
 			colorDim, colorReset, colorCyan, colorReset)
 		return nil
 	}
@@ -111,7 +111,11 @@ func runBoard(cmd *cobra.Command, args []string) error {
 			if i < len(tasks) {
 				t := tasks[i]
 				priColor := priorityColor(t.Priority)
-				idStr := fmt.Sprintf("#%d", t.ID)
+				prefix := ""
+				if t.Kind == store.KindEpic {
+					prefix = "E"
+				}
+				idStr := fmt.Sprintf("%s#%d", prefix, t.ID)
 				titleStr := truncate(t.Title, colWidth-len(idStr)-3)
 				card := fmt.Sprintf(" %s%s%s %s", priColor, idStr, colorReset, titleStr)
 				visibleLen := len(fmt.Sprintf(" %s %s", idStr, titleStr))

@@ -154,8 +154,13 @@ func runTaskShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Task #%d\n", task.ID)
+	label := "Task"
+	if task.Kind == store.KindEpic {
+		label = "Epic"
+	}
+	fmt.Printf("%s #%d\n", label, task.ID)
 	fmt.Printf("  Title:    %s\n", task.Title)
+	fmt.Printf("  Kind:     %s\n", task.Kind)
 	fmt.Printf("  Status:   %s\n", task.Status)
 	fmt.Printf("  Priority: %s\n", task.Priority)
 	if task.Description != "" {
@@ -168,7 +173,10 @@ func runTaskShow(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Blocked:  %s\n", task.BlockedReason)
 	}
 	if task.ParentID != nil {
-		fmt.Printf("  Parent:   #%d\n", *task.ParentID)
+		fmt.Printf("  Epic:     #%d\n", *task.ParentID)
+	}
+	if task.GitBranch != "" {
+		fmt.Printf("  Branch:   %s\n", task.GitBranch)
 	}
 	fmt.Printf("  Created:  %s\n", task.CreatedAt.Format("2006-01-02 15:04"))
 	fmt.Printf("  Updated:  %s\n", task.UpdatedAt.Format("2006-01-02 15:04"))

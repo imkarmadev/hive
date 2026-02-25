@@ -110,54 +110,128 @@ func ParseSubtasks(output string) []ParsedSubtask {
 }
 
 // ParseReview extracts the verdict and comments from reviewer output.
-// Expected format:
+// Supports multiple formats since LLMs don't always follow templates exactly:
 //
-//	VERDICT: APPROVE
-//	COMMENTS:
-//	- file:line: description
+//	VERDICT: APPROVE           — explicit verdict line
+//	**Verdict:** APPROVE       — markdown formatted
+//	I approve these changes    — natural language (fallback heuristic)
+//	LGTM                       — common shorthand
 func ParseReview(output string) ParsedReview {
 	result := ParsedReview{}
 
 	lines := strings.Split(output, "\n")
+	upper := strings.ToUpper(output)
 
+	// Pass 1: Look for explicit VERDICT: line.
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		upper := strings.ToUpper(trimmed)
+		lineUpper := strings.ToUpper(trimmed)
 
-		// Extract verdict.
-		if strings.HasPrefix(upper, "VERDICT:") {
-			rest := strings.TrimSpace(trimmed[8:])
-			rest = strings.ToUpper(rest)
-			if strings.Contains(rest, "APPROVE") {
+		// "VERDICT: APPROVE" or "**Verdict:** Approve" etc.
+		if strings.Contains(lineUpper, "VERDICT") && strings.Contains(lineUpper, ":") {
+			afterColon := ""
+			if idx := strings.Index(lineUpper, ":"); idx >= 0 {
+				afterColon = strings.ToUpper(strings.TrimSpace(trimmed[idx+1:]))
+			}
+			// Strip markdown formatting.
+			afterColon = strings.NewReplacer("*", "", "`", "", "#", "").Replace(afterColon)
+			afterColon = strings.TrimSpace(afterColon)
+
+			if strings.Contains(afterColon, "APPROVE") || strings.Contains(afterColon, "ACCEPT") {
 				result.Verdict = "APPROVE"
-			} else if strings.Contains(rest, "REJECT") {
+			} else if strings.Contains(afterColon, "REJECT") || strings.Contains(afterColon, "FAIL") {
 				result.Verdict = "REJECT"
 			}
-			continue
 		}
 
-		// Extract comments section.
-		if strings.HasPrefix(upper, "COMMENTS:") {
-			// Collect all following lines that start with - or *
+		// Extract comments section (COMMENTS:, Issues:, Problems:, etc.)
+		if strings.HasPrefix(lineUpper, "COMMENTS:") ||
+			strings.HasPrefix(lineUpper, "ISSUES:") ||
+			strings.HasPrefix(lineUpper, "PROBLEMS:") ||
+			strings.HasPrefix(lineUpper, "FINDINGS:") {
 			for j := i + 1; j < len(lines); j++ {
 				cl := strings.TrimSpace(lines[j])
 				if cl == "" {
 					continue
 				}
-				if strings.HasPrefix(cl, "-") || strings.HasPrefix(cl, "*") {
-					comment := strings.TrimSpace(cl[1:])
+				if strings.HasPrefix(cl, "-") || strings.HasPrefix(cl, "*") || strings.HasPrefix(cl, "•") {
+					comment := strings.TrimSpace(strings.TrimLeft(cl, "-*•"))
+					// Strip leading markdown bold.
+					comment = strings.TrimPrefix(comment, "**")
 					if comment != "" {
 						result.Comments = append(result.Comments, comment)
 					}
-				} else if strings.HasSuffix(cl, ":") {
-					// New section header, stop.
-					break
+				} else if strings.HasSuffix(cl, ":") && !strings.HasPrefix(cl, " ") {
+					break // New section header.
+				}
+			}
+		}
+	}
+
+	// Pass 2: If no explicit verdict found, try heuristics.
+	if result.Verdict == "" {
+		result.Verdict = inferVerdict(upper)
+	}
+
+	// Pass 3: If still no comments, try to extract bullet points from anywhere.
+	if len(result.Comments) == 0 {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if (strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "• ")) &&
+				len(trimmed) > 10 {
+				comment := strings.TrimSpace(strings.TrimLeft(trimmed, "-•"))
+				comment = strings.TrimPrefix(comment, "**")
+				if comment != "" {
+					result.Comments = append(result.Comments, comment)
 				}
 			}
 		}
 	}
 
 	return result
+}
+
+// inferVerdict uses heuristics to guess the verdict from natural language.
+func inferVerdict(upperOutput string) string {
+	// Strong approve signals.
+	approveSignals := []string{
+		"LGTM", "LOOKS GOOD", "I APPROVE", "APPROVED",
+		"CHANGES ARE GOOD", "CHANGES LOOK GOOD",
+		"NO ISSUES FOUND", "NO PROBLEMS FOUND",
+		"SHIP IT", "READY TO MERGE",
+	}
+	// Strong reject signals.
+	rejectSignals := []string{
+		"I REJECT", "REJECTED", "CHANGES REJECTED",
+		"MUST BE FIXED", "NEEDS FIXING", "CRITICAL ISSUE",
+		"NOT APPROVED", "DO NOT MERGE", "CANNOT APPROVE",
+		"VULNERABILITY", "SECURITY ISSUE", "BUG FOUND",
+		"HAS NOT BEEN FIXED", "NOT BEEN FIXED", "STILL VULNERABLE",
+	}
+
+	approveScore := 0
+	rejectScore := 0
+
+	for _, signal := range approveSignals {
+		if strings.Contains(upperOutput, signal) {
+			approveScore++
+		}
+	}
+	for _, signal := range rejectSignals {
+		if strings.Contains(upperOutput, signal) {
+			rejectScore++
+		}
+	}
+
+	// Need a clear winner with at least 1 signal.
+	if rejectScore > 0 && rejectScore >= approveScore {
+		return "REJECT"
+	}
+	if approveScore > 0 && approveScore > rejectScore {
+		return "APPROVE"
+	}
+
+	return "" // genuinely ambiguous
 }
 
 // ParseBlocked extracts a BLOCKED reason from agent output.

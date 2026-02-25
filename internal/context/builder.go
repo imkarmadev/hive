@@ -161,7 +161,11 @@ func (b *Builder) parentContext(parentID int64) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Parent Task (for context)\n")
+	label := "Parent Task"
+	if parent.Kind == store.KindEpic {
+		label = "Epic"
+	}
+	sb.WriteString(fmt.Sprintf("## %s (for context)\n", label))
 	sb.WriteString(fmt.Sprintf("**#%d: %s**\n", parent.ID, parent.Title))
 	if parent.Description != "" {
 		sb.WriteString(fmt.Sprintf("%s\n", parent.Description))

@@ -9,6 +9,7 @@ import (
 	"github.com/imkarma/hive/internal/agent"
 	"github.com/imkarma/hive/internal/config"
 	agentctx "github.com/imkarma/hive/internal/context"
+	"github.com/imkarma/hive/internal/git"
 	"github.com/imkarma/hive/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -205,6 +206,19 @@ func runFix(cmd *cobra.Command, args []string) error {
 					fmt.Printf("    %s•%s %s\n", colorGreen, colorReset, c)
 				}
 			}
+
+			// Commit approved work.
+			safety := git.New(workDir)
+			if safety.IsGitRepo() {
+				msg := fmt.Sprintf("hive: task #%d — %s", task.ID, task.Title)
+				committed, err := safety.CommitAll(msg)
+				if err != nil {
+					fmt.Printf("    %s⚠ commit: %v%s\n", colorYellow, err, colorReset)
+				} else if committed {
+					fmt.Printf("    %scommitted%s\n", colorDim, colorReset)
+				}
+			}
+
 			fmt.Printf("\n%s═══ Task #%d completed in %d iteration(s) ═══%s\n", colorGreen+colorBold, task.ID, iteration, colorReset)
 			return nil
 

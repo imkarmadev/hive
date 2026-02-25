@@ -37,13 +37,18 @@ func (r *CLIRunner) Mode() string { return "cli" }
 func (r *CLIRunner) Run(ctx context.Context, req Request) (*Response, error) {
 	start := time.Now()
 
-	// Build the command: cmd + args + prompt as last arg.
-	args := make([]string, len(r.cfg.Args))
-	copy(args, r.cfg.Args)
+	// Build the command: effective args (with auto-accept flags) + prompt.
+	args := r.cfg.EffectiveArgs()
 
-	// Append prompt as the final argument.
-	// Most CLI agents accept the prompt as a positional argument.
-	args = append(args, req.Prompt)
+	// For gemini, prompt goes via --prompt flag.
+	// For claude, prompt is positional after --print.
+	// For others, prompt is the last positional argument.
+	switch r.cfg.Cmd {
+	case "gemini":
+		args = append(args, "--prompt", req.Prompt)
+	default:
+		args = append(args, req.Prompt)
+	}
 
 	// Apply timeout from config or request.
 	timeout := time.Duration(r.cfg.DefaultTimeout()) * time.Second
