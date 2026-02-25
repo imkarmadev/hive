@@ -104,7 +104,7 @@ func (s *Store) CreateTask(title, description, priority string, parentID *int64)
 	id, _ := res.LastInsertId()
 
 	// Log creation event.
-	s.addEvent(id, "", "created", fmt.Sprintf("Task created: %s", title))
+	s.AddEvent(id, "", "created", fmt.Sprintf("Task created: %s", title))
 
 	return &Task{
 		ID:          id,
@@ -164,7 +164,7 @@ func (s *Store) UpdateTaskStatus(id int64, status TaskStatus) error {
 	if err != nil {
 		return fmt.Errorf("update task status: %w", err)
 	}
-	s.addEvent(id, "", "status_changed", fmt.Sprintf("Status changed to %s", status))
+	s.AddEvent(id, "", "status_changed", fmt.Sprintf("Status changed to %s", status))
 	return nil
 }
 
@@ -178,7 +178,7 @@ func (s *Store) AssignTask(id int64, agent, role string) error {
 	if err != nil {
 		return fmt.Errorf("assign task: %w", err)
 	}
-	s.addEvent(id, agent, "assigned", fmt.Sprintf("Assigned to %s (role: %s)", agent, role))
+	s.AddEvent(id, agent, "assigned", fmt.Sprintf("Assigned to %s (role: %s)", agent, role))
 	return nil
 }
 
@@ -192,7 +192,7 @@ func (s *Store) BlockTask(id int64, reason string) error {
 	if err != nil {
 		return fmt.Errorf("block task: %w", err)
 	}
-	s.addEvent(id, "", "blocked", reason)
+	s.AddEvent(id, "", "blocked", reason)
 	return nil
 }
 
@@ -206,7 +206,7 @@ func (s *Store) UnblockTask(id int64, answer string) error {
 	if err != nil {
 		return fmt.Errorf("unblock task: %w", err)
 	}
-	s.addEvent(id, "user", "unblocked", fmt.Sprintf("User answered: %s", answer))
+	s.AddEvent(id, "user", "unblocked", fmt.Sprintf("User answered: %s", answer))
 	return nil
 }
 
@@ -252,11 +252,12 @@ func (s *Store) AddReview(taskID int64, reviewerAgent, verdict, comments string)
 	if err != nil {
 		return err
 	}
-	s.addEvent(taskID, reviewerAgent, "reviewed", fmt.Sprintf("Verdict: %s", verdict))
+	s.AddEvent(taskID, reviewerAgent, "reviewed", fmt.Sprintf("Verdict: %s", verdict))
 	return nil
 }
 
-func (s *Store) addEvent(taskID int64, agent, eventType, content string) {
+// AddEvent records an event for a task.
+func (s *Store) AddEvent(taskID int64, agent, eventType, content string) {
 	now := time.Now().UTC()
 	s.db.Exec(
 		`INSERT INTO events (task_id, agent, event_type, content, timestamp) VALUES (?, ?, ?, ?, ?)`,
