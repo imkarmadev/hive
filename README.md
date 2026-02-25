@@ -2,7 +2,7 @@
 
 **Kanban board for AI agents.** You are the PM. Agents are your workers.
 
-A CLI tool that lets you organize work across multiple AI agents (Claude, Gemini, Codex, Ollama — anything with a CLI or API). Create tasks, assign agents, get cross-model code reviews, and run automated fix loops — all from your terminal.
+A CLI tool with an interactive TUI dashboard that lets you organize work across multiple AI agents (Claude, Gemini, Codex, Ollama — anything with a CLI or API). Create tasks, assign agents, get cross-model code reviews, and run automated fix loops — all from your terminal.
 
 ## Why
 
@@ -36,6 +36,47 @@ go build -o hive ./cmd/hive/
 # Optional: move to PATH
 sudo mv hive /usr/local/bin/
 ```
+
+## Interactive Dashboard
+
+Run `hive ui` to open a lazygit-style interactive TUI:
+
+```
+ hive — 5 tasks
+
+ BACKLOG (2)              IN PROGRESS (1)          BLOCKED (1)              REVIEW (0)     DONE (1)
+╭──────────────────────╮ ╭──────────────────────╮ ╭──────────────────────╮                ╭──────────────────────╮
+│ ● #3 Setup DB        │ │ ● #1 Add JWT auth    │ │ ● #2 Write tests     │                │ ○ #4 API docs        │
+│ [claude-dev]         │ │ [claude-dev]         │ │ ⚠ vitest or jest?    │                │                      │
+╰──────────────────────╯ ╰──────────────────────╯ ╰──────────────────────╯                ╰──────────────────────╯
+╭──────────────────────╮
+│ ● #5 Code review     │
+╰──────────────────────╯
+
+⚠ Blockers
+  #2: Which test framework: vitest or jest?
+
+↑↓←→/hjkl navigate  enter detail  n new task  a answer blocker  s start  d done  q quit
+```
+
+### TUI Hotkeys
+
+| Key | Action |
+|-----|--------|
+| `↑↓←→` / `hjkl` | Navigate the board |
+| `enter` | Open task detail (events, agent info) |
+| `n` / `c` | Create new task |
+| `a` | Answer a blocker |
+| `s` | Start task (→ in_progress) |
+| `d` | Mark as done |
+| `r` | Move to review |
+| `b` | Move to backlog |
+| `ctrl+p` | Cycle priority (in create dialog) |
+| `R` | Refresh board |
+| `esc` | Back |
+| `q` | Quit |
+
+Everything you can do with CLI commands, you can do from the dashboard without leaving it.
 
 ## Quick Start
 
@@ -83,6 +124,9 @@ hive fix 2
 
 # 7. Check the board
 hive board
+
+# Or open the interactive dashboard
+hive ui
 ```
 
 ## Commands
@@ -104,6 +148,7 @@ hive board
 | `hive board` | Show kanban board |
 | `hive status` | Quick status overview |
 | `hive log <id>` | Show event log for a task |
+| `hive ui` | Open interactive TUI dashboard |
 
 ## Agent Configuration
 
@@ -230,6 +275,7 @@ Like a developer reading a Jira ticket — everything they need is in the task.
 cmd/hive/           # CLI entry point
 internal/
   cli/              # All commands
+  tui/              # Interactive dashboard (bubbletea)
   config/           # YAML config parser
   store/            # SQLite task store
   agent/            # Agent runners (CLI + API adapters)
@@ -244,8 +290,8 @@ internal/
 - [x] PM agent integration (`hive plan`)
 - [x] Cross-model code review (`hive review`)
 - [x] Automated fix loop (`hive fix`)
+- [x] Interactive TUI dashboard (`hive ui`)
 - [ ] `hive run --auto` — full pipeline without manual steps
-- [ ] TUI dashboard (bubbletea)
 - [ ] Parallel task execution
 - [ ] Resume after crash
 - [ ] Safe mode with command allowlist
